@@ -4,10 +4,10 @@ const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
 const jsforce = require('jsforce');
-
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000;
-
+const frontendPath = path.join(__dirname, '../../frontend/dist');
 // Middleware
 app.use(cors({
     origin: 'http://localhost:5173',
@@ -153,16 +153,14 @@ app.post('/api/deploy-changes', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-const path = require('path');
 
-// 1. Serve static files from the React frontend 'dist' folder
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
+// Serve the static files from the React app
+app.use(express.static(frontendPath));
 
-// 2. Handle any requests that don't match your API routes by sending back index.html
+// Handle any requests that don't match API routes
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist', 'index.html'));
+    res.sendFile(path.join(frontendPath, 'index.html'));
 });
-
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
