@@ -1,5 +1,4 @@
-// 1. Correctly point to the .env file (one folder up from /src)
-require('dotenv').config({ path: '../.env' }); 
+require('dotenv').config({ path: '../.env' });
 
 const express = require('express');
 const cors = require('cors');
@@ -11,30 +10,46 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: 'http://localhost:5173',
     credentials: true
 }));
 app.use(express.json());
 
-// Session storage with a fallback secret to prevent startup errors
+// Session
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'salesforce_validation_manager_secret_123',
+    secret: process.env.SESSION_SECRET || 'dev_secret',
     resave: false,
     saveUninitialized: true,
     cookie: { secure: false } 
 }));
 
-// Salesforce OAuth2 Configuration
+// Salesforce OAuth2
 const oauth2 = new jsforce.OAuth2({
     loginUrl: 'https://login.salesforce.com',
     clientId: process.env.SALESFORCE_CLIENT_ID,
     clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
-    redirectUri: process.env.SALESFORCE_CALLBACK_URL // Must be http://localhost:5000/oauth/callback
+    redirectUri: process.env.SALESFORCE_CALLBACK_URL
 });
 
-// --- ROUTES ---
+// ----- ROUTES -----
 
-// 1. Login Route
+// Get current user
+app.get('/api/user', (req, res) => {
+    if (!req.session.accessToken) return res.json({});
+    const conn = new jsforce.Connection({
+        accessToken: req.session.accessToken,
+        instanceUrl: req.session.instanceUrl
+    });
+    conn.identity((err, identity) => {
+        if (err) return res.json({});
+        res.json({
+            username: identity.username,
+            organization: identity.organization_id
+        });
+    });
+});
+
+// Login
 app.get('/api/auth/login', (req, res) => {
     const authUrl = oauth2.getAuthorizationUrl({
         scope: 'api refresh_token offline_access'
@@ -42,33 +57,37 @@ app.get('/api/auth/login', (req, res) => {
     res.redirect(authUrl);
 });
 
-// 2. Callback Route (MATCHES YOUR NEW URL: /oauth/callback)
+// OAuth callback
 app.get('/oauth/callback', async (req, res) => {
     const { code } = req.query;
     if (!code) return res.status(400).send('No authorization code received.');
 
-    const conn = new jsforce.Connection({ oauth2: oauth2 });
+    const conn = new jsforce.Connection({ oauth2 });
     try {
         await conn.authorize(code);
-        
-        // Save credentials to session
         req.session.accessToken = conn.accessToken;
         req.session.instanceUrl = conn.instanceUrl;
         req.session.refreshToken = conn.refreshToken;
-
-        console.log("Authentication Successful!");
         
-        // Redirect to your React app dashboard
-        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard`);
+        console.log('Authentication Successful!');
+        // Redirect to frontend port
+        res.redirect('http://localhost:5173/dashboard'); 
     } catch (err) {
-        console.error("Auth Error:", err);
-        res.status(500).send("Login failed: " + err.message);
+        console.error('Auth Error:', err);
+        res.status(500).send('Login failed: ' + err.message);
     }
 });
 
-// 3. Fetch Validation Rules from Salesforce
+// Logout
+app.get('/api/logout', (req, res) => {
+    req.session.destroy(() => {
+        res.json({ success: true });
+    });
+});
+
+// Fetch Validation Rules
 app.get('/api/validation-rules', async (req, res) => {
-    if (!req.session.accessToken) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.accessToken) return res.status(401).json({ error: 'Unauthorized' });
 
     const conn = new jsforce.Connection({
         accessToken: req.session.accessToken,
@@ -76,7 +95,6 @@ app.get('/api/validation-rules', async (req, res) => {
     });
 
     try {
-        // Querying the Tooling API for Validation Rules
         const result = await conn.tooling.query(
             "SELECT Id, EntityDefinition.DeveloperName, ValidationName, Active, Description FROM ValidationRule"
         );
@@ -86,10 +104,14 @@ app.get('/api/validation-rules', async (req, res) => {
     }
 });
 
-// 4. Toggle Rule Status (Enable/Disable)
-app.post('/api/toggle-rule', async (req, res) => {
-    const { id, active } = req.body;
-    if (!req.session.accessToken) return res.status(401).json({ error: "Unauthorized" });
+// Deploy changes - Corrected Metadata placement
+app.post('/api/deploy-changes', async (req, res) => {
+    if (!req.session.accessToken) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { changes } = req.body;
+    if (!changes || !Array.isArray(changes)) {
+        return res.status(400).json({ error: 'Invalid changes array' });
+    }
 
     const conn = new jsforce.Connection({
         accessToken: req.session.accessToken,
@@ -97,12 +119,27 @@ app.post('/api/toggle-rule', async (req, res) => {
     });
 
     try {
-        await conn.tooling.sobject('ValidationRule').update({
-            Id: id,
-            Active: active
-        });
-        res.json({ success: true });
+        for (const change of changes) {
+            // 1. Retrieve the existing rule definition
+            const fullRule = await conn.tooling.sobject('ValidationRule').retrieve(change.id);
+            
+            // 2. Prepare the update body
+            // We MUST put 'active' inside Metadata and REMOVE it from the top level
+            const updatePayload = {
+                Id: change.id,
+                Metadata: {
+                    ...fullRule.Metadata,
+                    active: change.active // Lowercase 'active' is required inside Metadata
+                }
+            };
+
+            // 3. Perform the update
+            await conn.tooling.sobject('ValidationRule').update(updatePayload);
+        }
+
+        res.json({ success: true, updated: changes.length });
     } catch (err) {
+        console.error('Deploy error:', err);
         res.status(500).json({ error: err.message });
     }
 });
