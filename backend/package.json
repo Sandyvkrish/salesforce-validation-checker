@@ -4,8 +4,7 @@
   "description": "",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "build": "cd ../frontend && npm install && npm run build"
+    "start": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
