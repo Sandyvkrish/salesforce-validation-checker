@@ -30,7 +30,17 @@ const oauth2 = new jsforce.OAuth2({
     clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
     redirectUri: process.env.SALESFORCE_CALLBACK_URL
 });
-
+app.use(session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: true,
+    cookie: { 
+        // Only use secure cookies when the app is live on Railway (HTTPS)
+        secure: process.env.NODE_ENV === 'production', 
+        // Required for cross-site OAuth redirects on many modern browsers
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+    }
+}));
 // ----- ROUTES -----
 
 // Get current user
@@ -142,6 +152,15 @@ app.post('/api/deploy-changes', async (req, res) => {
         console.error('Deploy error:', err);
         res.status(500).json({ error: err.message });
     }
+});
+const path = require('path');
+
+// 1. Serve static files from the React frontend 'dist' folder
+app.use(express.static(path.join(__dirname, '../frontend/dist')));
+
+// 2. Handle any requests that don't match your API routes by sending back index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
